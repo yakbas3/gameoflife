@@ -18,38 +18,33 @@ import {
     Dimensions,
     LayoutChangeEvent,
     ScaledSize,
-    Platform, // For potential platform-specific adjustments if needed later
+    Platform,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 
 // Import constants, types, and logic functions
-import type { GridState, Coordinates } from '../../types/game';
+import type { GridState, Coordinates } from '../../types/game'; // Adjust path if needed
 import {
     createEmptyGrid,
     calculateNextGeneration,
     coordsToString,
-} from '../../lib/gameLogic';
+} from '../../lib/gameLogic'; // Adjust path if needed
 
 // Import Components
-import MainGridView from '../../components/MainGridView';
-import ControlPanel from '../../components/ControlPanel';
+import MainGridView from '../../components/MainGridView'; // Adjust path if needed
+import ControlPanel from '../../components/ControlPanel'; // Adjust path if needed
 
 // --- Constants ---
 const SIMULATION_INTERVAL_MS = 100;
-const DEBUG = true; // Enable/disable verbose logging
+const DEBUG = true; // Ensure this is true for logging
 
-// Define Cell Size in DPs (Density-Independent Pixels)
-// This controls the visual size on screen regardless of density
-const CELL_SIZE_DP = 25;
-
-// Define Panning Sensitivity
-const PAN_SENSITIVITY = 1.5;
-
-// Define Throttle interval for drawing (milliseconds)
-const DRAW_THROTTLE_MS = 50; // Adjust as needed for performance vs responsiveness
-
-// Define bounds for logical coordinates
-const MAX_COORD_VALUE = 1000000;
+// --- Dynamic View Constants ---
+const INITIAL_CELL_SIZE_DP = 25;
+const MIN_CELL_SIZE_DP = 5;     // Minimum visual size for cells in DPs
+const MAX_CELL_SIZE_DP = 100;   // Maximum visual size for cells in DPs
+const PAN_SENSITIVITY = 1.5;    // How fast panning feels
+const DRAW_THROTTLE_MS = 30;    // Throttle draw updates (lower = more responsive, higher = less JS load)
+const MAX_COORD_VALUE = 1000000;// Logical coordinate limits
 const MIN_COORD_VALUE = -1000000;
 
 type DimensionsChangeEvent = {
@@ -79,11 +74,15 @@ export default function GameScreen() {
         x: 0, y: 0, width: 0, height: 0, measured: false
     });
 
-    // --- Reanimated SharedValues (Logical Coordinates) ---
+    // --- Reanimated SharedValues ---
+    // Logical center of the view
     const viewCenterCoords = useSharedValue<Coordinates>({ row: 0, col: 0 });
+    // Current cell size in DPs (controls zoom)
+    const cellSizeDP = useSharedValue<number>(INITIAL_CELL_SIZE_DP);
 
-    // --- State for displaying info (Derived from state/shared values) ---
+    // --- State for displaying info ---
     const [displayCenter, setDisplayCenter] = useState(viewCenterCoords.value);
+    const [displayCellSize, setDisplayCellSize] = useState(cellSizeDP.value);
     const [displayLiveCellCount, setDisplayLiveCellCount] = useState(liveCells.size);
 
     // --- Refs ---
@@ -92,12 +91,11 @@ export default function GameScreen() {
     const lastActivatedCellCoords = useRef<Coordinates | null>(null);
     const lastDrawExecutionTimeRef = useRef<number>(0);
 
-    // Update display count when liveCells Set changes
+    // --- Reactions to update Display State from Shared Values ---
     useEffect(() => {
         setDisplayLiveCellCount(liveCells.size);
     }, [liveCells]);
 
-    // Reaction to update display state for view center when SharedValue changes
     useAnimatedReaction(
         () => viewCenterCoords.value, // Track the shared value
         (currentCenter, previousCenter) => {
@@ -110,7 +108,19 @@ export default function GameScreen() {
         [viewCenterCoords] // Dependency array
     );
 
-    // Measure grid container (gets absolute position X/Y and size W/H in DPs)
+    useAnimatedReaction(
+        () => cellSizeDP.value, // Track the shared value
+        (currentSize, previousSize) => {
+             // Update JS state only if value actually changed
+            if (currentSize !== previousSize) {
+                 // Run state update on JS thread
+                runOnJS(setDisplayCellSize)(currentSize);
+            }
+        },
+        [cellSizeDP] // Dependency array
+    );
+
+    // --- Measurement Logic ---
     const measureGridContainer = useCallback(() => {
         if (gridContainerRef.current) {
             gridContainerRef.current.measure((x, y, width, height, pageX, pageY) => {
@@ -129,7 +139,6 @@ export default function GameScreen() {
         }
     }, [DEBUG]); // Dependency on DEBUG for logging
 
-    // Use onLayout for reliable measurement trigger after layout changes
     const handleContainerLayout = useCallback((event: LayoutChangeEvent) => {
         const { width, height } = event.nativeEvent.layout;
         if (DEBUG) console.log(`Container onLayout: W=${width.toFixed(1)}, H=${height.toFixed(1)} [DPs]`);
@@ -137,7 +146,6 @@ export default function GameScreen() {
         measureGridContainer();
     }, [measureGridContainer, DEBUG]); // Dependency on measureGridContainer and DEBUG
 
-    // Effect for Screen Dimension Changes (e.g., rotation)
     useEffect(() => {
         const handleDimensionChange = ({ window }: DimensionsChangeEvent) => {
             if (DEBUG) console.log(`Screen dimensions changed: W=${window.width}, H=${window.height} [DPs]. Re-measuring container via onLayout.`);
@@ -153,27 +161,64 @@ export default function GameScreen() {
 
     // --- Simulation Logic Callbacks ---
     const runSimulationStep = useCallback(() => {
+        if(DEBUG) console.log(">>> runSimulationStep: Called"); // <-- Log 1
         try {
-            setLiveCells(cells => calculateNextGeneration(cells));
-            setGeneration(p => p + 1);
-        } catch (error) {
-            console.error("Error during simulation step:", error);
-            // Optionally stop simulation on error
-            setIsRunning(false);
-        }
-    }, []); // No external dependencies
+             setLiveCells(cells => {
+                  if(DEBUG) console.log(`>>> runSimulationStep: Calculating next gen from ${cells.size} cells`); // <-- Log 2
+                  const nextCells = calculateNextGeneration(cells);
+                  if(DEBUG) console.log(`>>> runSimulationStep: Next gen has ${nextCells.size} cells`); // <-- Log 3
+                   // **Crucial Check:** Did the state actually change?
+                   if (nextCells.size === cells.size) {
+                       let same = true;
+                       if (nextCells.size > 0) { // Avoid iterating empty sets unnecessarily
+                            for (const cell of cells) { if (!nextCells.has(cell)) { same = false; break; } }
+                            if (same) { for (const cell of nextCells) { if (!cells.has(cell)) { same = false; break; } } }
+                       }
+                       if (same && DEBUG) console.log(">>> runSimulationStep: Calculated next generation is identical to the current one.");
+                   }
+                  return nextCells;
+             });
+             setGeneration(p => {
+                  const nextGen = p + 1;
+                  if(DEBUG) console.log(`>>> runSimulationStep: Incrementing generation to ${nextGen}`); // <-- Log 4
+                  return nextGen;
+             });
+         } catch (error) {
+             console.error(">>> runSimulationStep: Error during simulation step:", error); // <-- Log 5
+             // Stop simulation on error to prevent infinite error loops if error is persistent
+             setIsRunning(false); // <-- This might be relevant if errors occur
+         }
+     }, [DEBUG]); // Dependency updated for logging
 
-    const handleToggleRun = useCallback(() => setIsRunning(prev => !prev), []);
-    const handleStep = useCallback(() => { if (!isRunning) runSimulationStep(); }, [isRunning, runSimulationStep]);
+
+    const handleToggleRun = useCallback(() => {
+        setIsRunning(prev => {
+             if(DEBUG) console.log(`>>> handleToggleRun: Toggling isRunning from ${prev} to ${!prev}`); // <-- Log 6
+             return !prev;
+        });
+    }, [DEBUG]); // Dependency updated for logging
+
+    const handleStep = useCallback(() => {
+        if (!isRunning) {
+             if(DEBUG) console.log(">>> handleStep: Executing single step because !isRunning"); // <-- Log 7
+             runSimulationStep();
+        } else {
+             if(DEBUG) console.log(">>> handleStep: Ignored because isRunning is true"); // <-- Log 8
+        }
+    }, [isRunning, runSimulationStep, DEBUG]); // Dependencies seem correct
+
     const handleClear = useCallback(() => {
-        if (intervalRef.current) clearInterval(intervalRef.current);
-        intervalRef.current = null;
+        if (intervalRef.current) {
+            clearInterval(intervalRef.current);
+            intervalRef.current = null;
+        }
         setIsRunning(false);
         setLiveCells(createEmptyGrid());
         setGeneration(0);
-        // Optionally reset view center
+        // Optionally reset view center and zoom
         // viewCenterCoords.value = { row: 0, col: 0 };
-    }, [viewCenterCoords]); // Added viewCenterCoords if resetting view
+        // cellSizeDP.value = INITIAL_CELL_SIZE_DP;
+    }, [viewCenterCoords, cellSizeDP]); // Add dependencies if resetting view/zoom
 
     const handleRandomize = useCallback(() => {
         if (isRunning) return; // Prevent randomization while running
@@ -215,43 +260,53 @@ export default function GameScreen() {
 
     // --- Simulation Loop Effect ---
     useEffect(() => {
+        // This effect runs when `isRunning` or `runSimulationStep` changes identity
+        if(DEBUG) console.log(`>>> useEffect[isRunning]: Effect triggered. isRunning = ${isRunning}`); // <-- Log 9
+
         if (intervalRef.current) {
+             if(DEBUG) console.log(">>> useEffect[isRunning]: Clearing existing interval (Ref was not null)"); // <-- Log 10
             clearInterval(intervalRef.current);
             intervalRef.current = null;
         }
+
         if (isRunning) {
-            if (DEBUG) console.log(`Starting simulation interval (${SIMULATION_INTERVAL_MS}ms)`);
+            // Only set interval if isRunning is true
+            if (DEBUG) console.log(`>>> useEffect[isRunning]: Setting up new interval (${SIMULATION_INTERVAL_MS}ms)`); // <-- Log 11
             intervalRef.current = setInterval(runSimulationStep, SIMULATION_INTERVAL_MS);
         } else {
-            if (DEBUG) console.log("Simulation paused/stopped.");
+             // This block runs if isRunning is false
+             if (DEBUG) console.log(">>> useEffect[isRunning]: isRunning is false, interval remains cleared."); // <-- Log 12
         }
-        // Cleanup function
+
+        // Cleanup function: runs when isRunning changes OR component unmounts
         return () => {
             if (intervalRef.current) {
-                if (DEBUG) console.log("Clearing simulation interval.");
+                if (DEBUG) console.log(">>> useEffect[isRunning] Cleanup: Clearing interval ID", intervalRef.current); // <-- Log 13
                 clearInterval(intervalRef.current);
                 intervalRef.current = null;
+            } else {
+                 if (DEBUG) console.log(">>> useEffect[isRunning] Cleanup: No interval ref to clear."); // <-- Log 14
             }
         };
-    }, [isRunning, runSimulationStep, DEBUG]); // Dependencies
+    }, [isRunning, runSimulationStep, DEBUG]); // Dependencies: isRunning, runSimulationStep, DEBUG
+
 
     // --- Grid Update Logic (Draw Handler - Receives *Logical* Coords) ---
     const handleDraw = useCallback((targetRowInt: number, targetColInt: number) => {
         // This function runs on the JS thread
         try {
-            // Double-check inputs received from UI thread (already checked there, but belt-and-suspenders)
+            // Double-check inputs received from UI thread
             if (isNaN(targetRowInt) || isNaN(targetColInt) || !isFinite(targetRowInt) || !isFinite(targetColInt)) {
                 if (DEBUG) console.error(`handleDraw (JS Thread) received invalid coords: [${targetRowInt}, ${targetColInt}]. Skipping.`);
                 return;
             }
-            // Re-clamping might be redundant if done correctly on UI thread, but safer
+            // Re-clamping is safer
              const clampedRow = Math.max(MIN_COORD_VALUE, Math.min(MAX_COORD_VALUE, targetRowInt));
              const clampedCol = Math.max(MIN_COORD_VALUE, Math.min(MAX_COORD_VALUE, targetColInt));
 
              if (clampedRow !== targetRowInt || clampedCol !== targetColInt) {
                   if (DEBUG) console.warn(`handleDraw (JS Thread) clamped coords from [${targetRowInt}, ${targetColInt}] to [${clampedRow}, ${clampedCol}]`);
              }
-
 
             const coordsStr = coordsToString(clampedRow, clampedCol);
 
@@ -272,26 +327,31 @@ export default function GameScreen() {
 
     // --- Gesture Definitions ---
 
-    // --- Two-Finger Pan Gesture (for Navigation) ---
+    // --- Two-Finger Pan Gesture (Navigation) ---
     const panGestureContext = useSharedValue({ startRow: 0, startCol: 0 });
     const viewPanGesture = Gesture.Pan()
         .minPointers(2)
         .maxPointers(2)
         .averageTouches(true) // Use average position of touches
         .onBegin(() => {
-            // Store the starting center coordinates when pan begins
+            // Store start logical center for delta calculations
             panGestureContext.value = { startRow: viewCenterCoords.value.row, startCol: viewCenterCoords.value.col };
-            if (DEBUG) console.log(`(2-Finger) Pan Begin: Start@ R=${panGestureContext.value.startRow.toFixed(2)}, C=${panGestureContext.value.startCol.toFixed(2)}`);
+            // No console log here to avoid spam when running simultaneous with pinch
         })
         .onUpdate((event) => {
             // This runs on the UI thread
             try {
-                // Calculate change in logical coords based on translation (DPs) and cell size (DPs)
-                // Division by CELL_SIZE_DP converts pixel distance to logical distance
-                const deltaCol = (event.translationX / CELL_SIZE_DP) * PAN_SENSITIVITY;
-                const deltaRow = (event.translationY / CELL_SIZE_DP) * PAN_SENSITIVITY;
+                // Read CURRENT cell size (might be changing due to simultaneous pinch)
+                const currentCellSize = cellSizeDP.value;
+                if (currentCellSize <= 0 || !isFinite(currentCellSize)) {
+                    if (DEBUG) console.error(`(Pan) Invalid cell size: ${currentCellSize}`);
+                    return; // Avoid division by zero / NaN
+                }
+                // Calculate logical delta based on DPs and current cell size
+                const deltaCol = (event.translationX / currentCellSize) * PAN_SENSITIVITY;
+                const deltaRow = (event.translationY / currentCellSize) * PAN_SENSITIVITY;
 
-                // Calculate new center (subtract delta because panning moves the view opposite to finger motion)
+                // Calculate new center relative to the start position
                 const newCol = panGestureContext.value.startCol - deltaCol;
                 const newRow = panGestureContext.value.startRow - deltaRow;
 
@@ -301,26 +361,124 @@ export default function GameScreen() {
 
                 // Basic check for NaN/Infinity before updating shared value
                 if (!isFinite(clampedRow) || !isFinite(clampedCol)) {
-                    if (DEBUG) console.error(`(2-Finger) Pan calculation resulted in invalid coords: Row=${clampedRow}, Col=${clampedCol}. Inputs: dX=${event.translationX}, dY=${event.translationY}`);
+                    if (DEBUG) console.error(`(Pan) Invalid calculated center: R=${clampedRow}, C=${clampedCol}. Inputs: dX=${event.translationX}, dY=${event.translationY}, cellSize=${currentCellSize}`);
                     return; // Prevent updating shared value with invalid numbers
                 }
 
-                // Update shared value directly (efficient on UI thread)
+                // Update view center shared value directly (efficient on UI thread)
                 viewCenterCoords.value = { row: clampedRow, col: clampedCol };
 
             } catch (error) {
                 // Log error but don't necessarily crash the app
-                console.error("(2-Finger) Pan Update Error:", error);
-                // Potentially reset context or take other recovery action if needed
+                console.error("(Pan) Update Error:", error);
             }
         })
         .onEnd(() => {
-            if (DEBUG) console.log(`(2-Finger) Pan End: Final Center R=${viewCenterCoords.value.row.toFixed(2)}, C=${viewCenterCoords.value.col.toFixed(2)}`);
-            // Reset context if necessary, though not strictly required here
-            // panGestureContext.value = { startRow: 0, startCol: 0 };
+            if (DEBUG) console.log(`(Pan) End: Center R=${viewCenterCoords.value.row.toFixed(2)}, C=${viewCenterCoords.value.col.toFixed(2)}`);
+            // Context is automatically reset by gesture handler state machine
         });
 
-    // --- One-Finger Drag Gesture (for Drawing - Center Relative Calc) ---
+    // --- Pinch Gesture (Zooming & Focal Point Adjustment) ---
+    const pinchStartContext = useSharedValue({ startCellSize: 0, startViewCenter: { row: 0, col: 0 } });
+    const pinchGesture = Gesture.Pinch()
+        .onBegin((event) => {
+            // Store starting state for pinch calculations
+            pinchStartContext.value = {
+                startCellSize: cellSizeDP.value,
+                startViewCenter: { row: viewCenterCoords.value.row, col: viewCenterCoords.value.col }
+            };
+            if (DEBUG) console.log(`(Pinch) Begin: Start Size=${pinchStartContext.value.startCellSize.toFixed(2)} Center R=${pinchStartContext.value.startViewCenter.row.toFixed(2)} C=${pinchStartContext.value.startViewCenter.col.toFixed(2)}`);
+        })
+        .onUpdate((event) => {
+            // Runs on UI thread
+            try {
+                // --- Measurement Check ---
+                // Ensure we have container dimensions needed for focal point mapping
+                if (!gridContainerMeasurements.measured || gridContainerMeasurements.width <= 0 || gridContainerMeasurements.height <= 0) {
+                    if (DEBUG) console.warn("(Pinch) Update ignored: Container not measured or zero size.");
+                    return;
+                }
+                const { x: containerX, y: containerY, width: containerWidthDP, height: containerHeightDP } = gridContainerMeasurements;
+
+                // --- Calculate New Cell Size ---
+                const startSize = pinchStartContext.value.startCellSize;
+                // Prevent issues if starting size was somehow invalid
+                if (startSize <= 0 || !isFinite(startSize)) {
+                     if (DEBUG) console.error(`(Pinch) Invalid start cell size in context: ${startSize}`);
+                     return;
+                }
+                const targetSize = startSize * event.scale;
+                // Clamp the new size within defined limits
+                const newClampedCellSize = Math.max(MIN_CELL_SIZE_DP, Math.min(MAX_CELL_SIZE_DP, targetSize));
+
+                // Validate the calculated new cell size before proceeding
+                if (!isFinite(newClampedCellSize) || newClampedCellSize <= 0) {
+                     if (DEBUG) console.error(`(Pinch) Invalid new cell size calculation: ${newClampedCellSize}. Scale=${event.scale}, Start=${startSize}`);
+                     return; // Prevent division by zero or invalid state later
+                }
+
+                // --- Calculate Focal Point Adjustment ---
+                const { startViewCenter } = pinchStartContext.value;
+                const startCenterRow = startViewCenter.row;
+                const startCenterCol = startViewCenter.col;
+
+                // 1. Focal point relative to container center (in DPs)
+                const focalX_DP = event.focalX; // Absolute screen coordinates in DPs
+                const focalY_DP = event.focalY;
+                const containerCenterX_DP = containerX + containerWidthDP / 2;
+                const containerCenterY_DP = containerY + containerHeightDP / 2;
+                const tapRelCenterX_DP = focalX_DP - containerCenterX_DP;
+                const tapRelCenterY_DP = focalY_DP - containerCenterY_DP;
+
+                // 2. Logical coordinate under the focal point *using the START state*
+                // (Map the focal point from screen DPs to logical coords based on starting zoom/center)
+                const colOffsetStart = tapRelCenterX_DP / startSize;
+                const rowOffsetStart = tapRelCenterY_DP / startSize;
+                const focalLogicalCol = startCenterCol + colOffsetStart;
+                const focalLogicalRow = startCenterRow + rowOffsetStart;
+
+                 // Validate focal logical coordinates
+                 if (!isFinite(focalLogicalCol) || !isFinite(focalLogicalRow)) {
+                     if (DEBUG) console.error(`(Pinch) Invalid focal logical coord calculation: R=${focalLogicalRow}, C=${focalLogicalCol}. OffsetStart R=${rowOffsetStart}, C=${colOffsetStart}`);
+                     return;
+                 }
+
+
+                // 3. Calculate the required NEW center coords to keep the focal logical point under the focal screen point *at the new zoom level*
+                // (Solve the mapping equation for the new center)
+                const colOffsetNew = tapRelCenterX_DP / newClampedCellSize; // Offset based on *new* cell size
+                const rowOffsetNew = tapRelCenterY_DP / newClampedCellSize;
+                const newTargetCenterCol = focalLogicalCol - colOffsetNew;
+                const newTargetCenterRow = focalLogicalRow - rowOffsetNew;
+
+                // Clamp the new center coordinates to defined bounds
+                const clampedNewCenterCol = Math.max(MIN_COORD_VALUE, Math.min(MAX_COORD_VALUE, newTargetCenterCol));
+                const clampedNewCenterRow = Math.max(MIN_COORD_VALUE, Math.min(MAX_COORD_VALUE, newTargetCenterRow));
+
+                 // Validate final calculated center coordinates
+                 if (!isFinite(clampedNewCenterRow) || !isFinite(clampedNewCenterCol)) {
+                      if (DEBUG) console.error(`(Pinch) Invalid new center calc: R=${clampedNewCenterRow}, C=${clampedNewCenterCol}. OffsetNew R=${rowOffsetNew}, C=${colOffsetNew}`);
+                      return;
+                 }
+
+                // --- Update Shared Values ---
+                // Atomically update both zoom and center on the UI thread
+                cellSizeDP.value = newClampedCellSize;
+                viewCenterCoords.value = { row: clampedNewCenterRow, col: clampedNewCenterCol };
+
+            } catch (error) {
+                 console.error("(Pinch) Update Error:", error);
+                 // Log context if possible to aid debugging
+                 if(DEBUG) console.log("Pinch Error Context:", { scale: event.scale, focalX: event.focalX, focalY: event.focalY, startContext: pinchStartContext.value, container: gridContainerMeasurements });
+            }
+        })
+        .onEnd(() => {
+            if (DEBUG) console.log(`(Pinch) End: Final Size=${cellSizeDP.value.toFixed(2)}, Center R=${viewCenterCoords.value.row.toFixed(2)}, C=${viewCenterCoords.value.col.toFixed(2)}`);
+            // Context is reset automatically
+        });
+
+
+    // --- One-Finger Drag Gesture (Drawing) ---
     const drawPanGesture = Gesture.Pan()
         .minPointers(1)
         .maxPointers(1)
@@ -328,14 +486,15 @@ export default function GameScreen() {
             // Reset tracking refs for the start of a new draw stroke
             lastActivatedCellCoords.current = null;
             lastDrawExecutionTimeRef.current = 0; // Allow immediate first draw
-            if (DEBUG) console.log("(1-Finger) Draw Begin");
+            if (DEBUG) console.log("(Draw) Begin");
         })
         .onUpdate((event) => {
             // This runs on the UI thread
             try {
                 // --- Measurement Check ---
                 if (!gridContainerMeasurements.measured || gridContainerMeasurements.width <= 0 || gridContainerMeasurements.height <= 0) {
-                    if (DEBUG) console.warn("Draw Update ignored: Container not measured or has zero size.");
+                    // Conditionally log to avoid spamming if container not ready
+                    // if (DEBUG) console.warn("(Draw) Update ignored: Container not measured or zero size.");
                     return;
                 }
 
@@ -352,6 +511,13 @@ export default function GameScreen() {
                 const { x: containerX, y: containerY, width: containerWidthDP, height: containerHeightDP } = gridContainerMeasurements;
                 const center_row = viewCenterCoords.value.row;
                 const center_col = viewCenterCoords.value.col;
+                // *** Use the CURRENT cell size from shared value ***
+                const currentCellSize = cellSizeDP.value;
+                // Validate cell size before division
+                if (currentCellSize <= 0 || !isFinite(currentCellSize)) {
+                    if (DEBUG) console.error(`(Draw) Invalid cell size: ${currentCellSize}`);
+                    return;
+                }
 
                 // Touch position (Absolute DPs)
                 const screenX_DP = event.absoluteX;
@@ -363,14 +529,9 @@ export default function GameScreen() {
                 const tapRelCenterX_DP = screenX_DP - containerCenterX_DP;
                 const tapRelCenterY_DP = screenY_DP - containerCenterY_DP;
 
-                // 2. Convert DP offset from center to Logical offset using CELL_SIZE_DP
-                // Check CELL_SIZE_DP to prevent division by zero
-                if (CELL_SIZE_DP <= 0) {
-                     if (DEBUG) console.error("CELL_SIZE_DP is zero or negative, cannot calculate draw coordinates.");
-                     return;
-                }
-                const colOffset = tapRelCenterX_DP / CELL_SIZE_DP;
-                const rowOffset = tapRelCenterY_DP / CELL_SIZE_DP;
+                // 2. Convert DP offset from center to Logical offset using currentCellSize
+                const colOffset = tapRelCenterX_DP / currentCellSize;
+                const rowOffset = tapRelCenterY_DP / currentCellSize;
 
                 // 3. Add logical offset to logical center coordinate
                 const targetCol = center_col + colOffset;
@@ -382,7 +543,8 @@ export default function GameScreen() {
 
                 // --- Sanity Check & Clamping (Crucial before runOnJS) ---
                 if (isNaN(targetRowInt) || isNaN(targetColInt) || !isFinite(targetRowInt) || !isFinite(targetColInt)) {
-                    if (DEBUG) console.error(`Draw calc invalid number: [${targetRowInt}, ${targetColInt}]. Inputs: screenDP(${screenX_DP},${screenY_DP}), center(${center_row},${center_col}), container(${containerX},${containerY},${containerWidthDP},${containerHeightDP})`);
+                    // Conditionally log to avoid spamming
+                    // if (DEBUG) console.error(`(Draw) Calc invalid number: [${targetRowInt}, ${targetColInt}]. Inputs: screenDP(${screenX_DP},${screenY_DP}), center(${center_row},${center_col}), cellSize=${currentCellSize}`);
                     return; // Do not proceed with invalid coordinates
                 }
 
@@ -391,16 +553,12 @@ export default function GameScreen() {
                 const clampedColInt = Math.max(MIN_COORD_VALUE, Math.min(MAX_COORD_VALUE, targetColInt));
 
                 if ((clampedRowInt !== targetRowInt || clampedColInt !== targetColInt) && DEBUG) {
-                     console.warn(`Draw coordinate clamped from [${targetRowInt}, ${targetColInt}] to [${clampedRowInt}, ${clampedColInt}]`);
+                     // Log clamping only if it happens
+                     console.warn(`(Draw) Coordinate clamped from [${targetRowInt}, ${targetColInt}] to [${clampedRowInt}, ${clampedColInt}]`);
                 }
 
                 // Current target cell coordinates object (using clamped values)
                 const currentCellCoords: Coordinates = { row: clampedRowInt, col: clampedColInt };
-
-                if (DEBUG) {
-                    // Log throttled update details
-                    // console.log(`Draw Throttled Update: TgtInt(${clampedRowInt},${clampedColInt}), TgtFloat(${targetRow.toFixed(2)},${targetCol.toFixed(2)})`);
-                }
 
                 // --- Activate cell only if it's different from the last one ---
                 if (currentCellCoords.row !== lastActivatedCellCoords.current?.row ||
@@ -413,16 +571,9 @@ export default function GameScreen() {
                 }
 
             } catch (error) {
-                console.error("(1-Finger) Draw Update Error:", error);
-                // Log context if possible
-                if (DEBUG) {
-                    console.log("Error occurred with inputs:", {
-                        absoluteX: event.absoluteX,
-                        absoluteY: event.absoluteY,
-                        container: gridContainerMeasurements,
-                        center: viewCenterCoords.value,
-                    });
-                }
+                console.error("(Draw) Update Error:", error);
+                // Log context if possible to aid debugging
+                if (DEBUG) console.log("Draw Error Context:", { absX: event.absoluteX, absY: event.absoluteY, container: gridContainerMeasurements, center: viewCenterCoords.value, cellSize: cellSizeDP.value });
                 // Reset last activated to prevent potential stuck state?
                 lastActivatedCellCoords.current = null;
             }
@@ -430,11 +581,14 @@ export default function GameScreen() {
         .onEnd(() => {
             // Reset ref on gesture end
             lastActivatedCellCoords.current = null;
-            if (DEBUG) console.log("(1-Finger) Draw End");
+            if (DEBUG) console.log("(Draw) End");
         });
 
-    // Combine Gestures: Pan to draw (1 finger) XOR Pan to navigate (2 fingers)
-    const composedGesture = Gesture.Exclusive(drawPanGesture, viewPanGesture);
+    // --- Combine Gestures ---
+    // Allow Pan and Pinch to run simultaneously (both use 2 fingers)
+    const twoFingerGestures = Gesture.Simultaneous(viewPanGesture, pinchGesture);
+    // Make Draw exclusive from the 2-finger gestures (1 finger vs 2 fingers)
+    const composedGesture = Gesture.Exclusive(drawPanGesture, twoFingerGestures);
 
     // --- Render ---
     return (
@@ -442,13 +596,15 @@ export default function GameScreen() {
             <View style={styles.container}>
                 {/* Status Display Area */}
                 <View style={styles.statusContainer}>
-                    <Text style={styles.statusText}>Gen: {generation}</Text>
-                    <Text style={styles.statusText}>{isRunning ? 'Running' : 'Paused'}</Text>
+                    <Text style={styles.statusText}>Gen: {generation}</Text> {/* Check if this updates */}
+                    <Text style={styles.statusText}>{isRunning ? 'Running' : 'Paused'}</Text> {/* Check if this changes */}
                     <Text style={styles.statusText}>Live: {displayLiveCellCount}</Text>
                     <Text style={styles.statusText}>
                         Center: R:{displayCenter.row.toFixed(1)} C:{displayCenter.col.toFixed(1)}
                     </Text>
-                    {/* Show container size in DPs when measured */}
+                     <Text style={styles.statusText}>
+                        Zoom: {displayCellSize.toFixed(1)}dp
+                     </Text>
                     {debugMode && gridContainerMeasurements.measured && (
                         <Text style={styles.statusText}>
                             ContDP: W:{gridContainerMeasurements.width.toFixed(0)} H:{gridContainerMeasurements.height.toFixed(0)}
@@ -467,9 +623,9 @@ export default function GameScreen() {
                         <View style={styles.gestureDetectorWrapper}>
                             {gridContainerMeasurements.measured ? (
                                 <MainGridView
-                                    liveCells={liveCells}
-                                    viewCenterCoords={viewCenterCoords} // Pass the SharedValue object
-                                    cellSizeDP={CELL_SIZE_DP} // Pass cell size in DPs
+                                    liveCells={liveCells} // Pass current liveCells
+                                    viewCenterCoords={viewCenterCoords} // Pass SharedValue
+                                    cellSizeDP={cellSizeDP} // Pass SharedValue
                                 />
                             ) : (
                                 <View style={styles.loadingContainer}>
@@ -481,15 +637,15 @@ export default function GameScreen() {
                 </View>
 
                 {/* Control Panel */}
-                <ControlPanel
-                    isRunning={isRunning}
-                    onToggleRun={handleToggleRun}
-                    onStep={handleStep}
-                    onClear={handleClear}
-                    onRandomize={handleRandomize}
-                    onToggleDebug={handleToggleDebug}
-                    debugMode={debugMode}
-                />
+                 <ControlPanel
+                     isRunning={isRunning} // Pass current isRunning state
+                     onToggleRun={handleToggleRun} // Pass the toggle handler
+                     onStep={handleStep}
+                     onClear={handleClear}
+                     onRandomize={handleRandomize}
+                     onToggleDebug={handleToggleDebug}
+                     debugMode={debugMode}
+                 />
 
                 <StatusBar style="auto" />
             </View>
@@ -497,7 +653,7 @@ export default function GameScreen() {
     );
 }
 
-// --- Styles --- (Mostly unchanged, ensure SpaceMono font is available)
+// --- Styles ---
 const styles = StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: '#f0f0f0' },
     container: {
