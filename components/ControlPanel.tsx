@@ -1,7 +1,7 @@
 // GameOfLifeApp/components/ControlPanel.tsx
 
-import React from 'react';
-import { View, StyleSheet, Platform, Pressable } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, StyleSheet, Platform, Pressable, Animated } from 'react-native';
 import { FontAwesome5 } from '@expo/vector-icons';
 
 interface ControlPanelProps {
@@ -26,25 +26,44 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   onToggleDebug,
   debugMode = false,
 }) => {
-  return (
-    <View style={styles.container}>
-      <View style={styles.buttonRow}>
-        <Pressable
-          style={({pressed}) => [
-            styles.iconButton,
-            isRunning ? styles.pauseButton : styles.startButton,
-            pressed && styles.buttonPressed
-          ]}
-          onPress={onToggleRun}
-          accessibilityLabel={isRunning ? "Pause" : "Start"}
-        >
-          <FontAwesome5
-            name={isRunning ? 'pause' : 'play'}
-            size={22} 
-            color="#fff"
-          />
-        </Pressable>
-
+  // Animation for the puzzle piece button
+  const glowAnim = useRef(new Animated.Value(0)).current;
+  
+  // Set up the glowing animation
+  useEffect(() => {
+    const startAnimation = () => {
+      Animated.sequence([
+        Animated.timing(glowAnim, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: false,
+        }),
+        Animated.timing(glowAnim, {
+          toValue: 0,
+          duration: 1000,
+          useNativeDriver: false,
+        }),
+      ]).start(() => startAnimation());
+    };
+    
+    startAnimation();
+    
+    return () => {
+      glowAnim.stopAnimation();
+    };
+  }, [glowAnim]);
+  
+  // Generate shadow color for the glowing effect
+  const glowShadowColor = glowAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['rgba(0, 123, 255, 0.3)', 'rgba(0, 123, 255, 0.9)']
+  });
+  
+  // Define button order
+  const buttonOrder = [
+    {
+      type: 'step',
+      component: (
         <Pressable
           style={({pressed}) => [
             styles.iconButton,
@@ -62,7 +81,11 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
             color="#fff"
           />
         </Pressable>
-
+      )
+    },
+    {
+      type: 'random',
+      component: (
         <Pressable
           style={({pressed}) => [
             styles.iconButton,
@@ -80,25 +103,63 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
             color="#fff"
           />
         </Pressable>
-
+      )
+    },
+    {
+      type: 'play-pause',
+      component: (
         <Pressable
           style={({pressed}) => [
             styles.iconButton,
-            styles.patternsButton,
-            pressed && styles.buttonPressed,
-            isRunning && styles.disabledButton
+            styles.playPauseButton,
+            isRunning ? styles.pauseButton : styles.startButton,
+            pressed && styles.buttonPressed
           ]}
-          onPress={onShowPatterns}
-          disabled={isRunning}
-          accessibilityLabel="Patterns"
+          onPress={onToggleRun}
+          accessibilityLabel={isRunning ? "Pause" : "Start"}
         >
           <FontAwesome5
-            name="puzzle-piece"
-            size={22}
+            name={isRunning ? 'pause' : 'play'}
+            size={24} // Slightly larger icon
             color="#fff"
           />
         </Pressable>
-
+      )
+    },
+    {
+      type: 'patterns',
+      component: (
+        <Animated.View style={{
+          shadowColor: glowShadowColor,
+          shadowOffset: { width: 0, height: 0 },
+          shadowOpacity: 1,
+          shadowRadius: 10,
+          elevation: 5,
+          borderRadius: 25,
+        }}>
+          <Pressable
+            style={({pressed}) => [
+              styles.iconButton,
+              styles.patternsButton,
+              pressed && styles.buttonPressed,
+              isRunning && styles.disabledButton
+            ]}
+            onPress={onShowPatterns}
+            disabled={isRunning}
+            accessibilityLabel="Patterns"
+          >
+            <FontAwesome5
+              name="puzzle-piece"
+              size={22}
+              color="#fff"
+            />
+          </Pressable>
+        </Animated.View>
+      )
+    },
+    {
+      type: 'clear',
+      component: (
         <Pressable
           style={({pressed}) => [
             styles.iconButton,
@@ -114,6 +175,18 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
             color="#fff"
           />
         </Pressable>
+      )
+    }
+  ];
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.buttonRow}>
+        {buttonOrder.map((button, index) => (
+          <View key={button.type}>
+            {button.component}
+          </View>
+        ))}
       </View>
       
       {/* Debug Toggle is removed from UI but props are kept for functionality */}
@@ -154,6 +227,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 2,
     elevation: 2,
+  },
+  playPauseButton: {
+    width: 60, // Slightly larger button
+    height: 60, // Slightly larger button
+    borderRadius: 30, // Keep it circular
   },
   buttonPressed: {
     opacity: 0.8,
