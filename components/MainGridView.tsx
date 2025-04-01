@@ -13,16 +13,30 @@ import type { GridState, Coordinates } from '../types/game'; // Adjust path if n
 import { stringToCoords } from '../lib/gameLogic'; // Adjust path if needed
 
 // --- Constants ---
-const ALIVE_COLOR: [number, number, number, number] = [0.3, 1.0, 0.3, 1.0]; // Bright Green
+const DEFAULT_ALIVE_COLOR: [number, number, number, number] = [0.3, 1.0, 0.3, 1.0]; // Bright Green
 const GRID_BG_COLOR: [number, number, number, number] = [0.05, 0.05, 0.05, 1.0]; // Very Dark Grey
 const GRID_LINE_COLOR: [number, number, number, number] = [0.3, 0.3, 0.3, 0.5]; // Semi-transparent Grey
 const DEBUG_GL = true; // Enable detailed GL error checks and logging
+
+// Helper function to convert hex color to GL color array
+const hexToGLColor = (hex: string): [number, number, number, number] => {
+    // Remove # if present
+    hex = hex.replace('#', '');
+    
+    // Parse the hex values
+    const r = parseInt(hex.substring(0, 2), 16) / 255;
+    const g = parseInt(hex.substring(2, 4), 16) / 255;
+    const b = parseInt(hex.substring(4, 6), 16) / 255;
+    
+    return [r, g, b, 1.0]; // Always use full opacity
+};
 
 // --- Props Interface ---
 interface MainGridViewProps {
     liveCells: GridState; // Set of live cell coordinate strings
     viewCenterCoords: SharedValue<Coordinates>; // Center of the viewport (logical coords) - SharedValue
     cellSizeDP: SharedValue<number>;          // Cell size received in DPs - SharedValue
+    liveCellColor?: string;                  // Optional hex color for live cells
 }
 
 // --- WebGL Shaders ---
@@ -67,7 +81,20 @@ const MainGridView: React.FC<MainGridViewProps> = ({
     liveCells,
     viewCenterCoords,
     cellSizeDP,
+    liveCellColor = '#00ff00', // Default color if not provided
 }) => {
+    // Convert hex color to GL color array
+    const aliveColorRef = useRef<[number, number, number, number]>(
+        liveCellColor ? hexToGLColor(liveCellColor) : DEFAULT_ALIVE_COLOR
+    );
+    
+    // Update alive color when prop changes
+    useEffect(() => {
+        if (liveCellColor) {
+            aliveColorRef.current = hexToGLColor(liveCellColor);
+        }
+    }, [liveCellColor]);
+    
     // --- Refs ---
     const glRef = useRef<ExpoWebGLRenderingContext | null>(null);
     const programRef = useRef<WebGLProgram | null>(null);
@@ -226,8 +253,8 @@ const MainGridView: React.FC<MainGridViewProps> = ({
              if (!colorUniformLocationRef.current || !dimensionsUniformLocationRef.current || !translationUniformLocationRef.current) {
                  if (DEBUG_GL) console.error("[MainGridView] drawGrid: Missing uniform location for live cells.");
              } else {
-                gl.uniform4fv(colorUniformLocationRef.current, ALIVE_COLOR);
-                 if (!checkGLError(gl, "glUniform4fv live cell color")) return;
+                gl.uniform4fv(colorUniformLocationRef.current, aliveColorRef.current);
+                 if (!checkGLError(gl, "glUniform4fv alive cell color")) return;
 
                 const cellPaddingDP = currentCellSizeDP > 3 ? 1 : 0;
                 const cellPaddingPixel = Math.round(cellPaddingDP * pRatio);
@@ -491,7 +518,7 @@ const MainGridView: React.FC<MainGridViewProps> = ({
 
     // --- Render ---
     return (
-        <View style={styles.container}>
+        <View style={[styles.container]}>
             <GLView style={StyleSheet.absoluteFill} onContextCreate={onContextCreate} />
         </View>
     );
@@ -501,7 +528,7 @@ const MainGridView: React.FC<MainGridViewProps> = ({
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: 'rgb(13, 13, 13)',
+        backgroundColor: 'rgb(13, 13, 13)', // Dark background for grid
         overflow: 'hidden'
     },
 });

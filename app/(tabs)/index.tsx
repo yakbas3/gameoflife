@@ -24,6 +24,7 @@ import {
     AppStateStatus, // <- Import AppStateStatus
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { useLocalSearchParams } from 'expo-router';
 
 // Import constants, types, and logic functions
 import type { GridState, Coordinates } from '../../types/game'; // Adjust path if needed
@@ -32,13 +33,15 @@ import {
     calculateNextGeneration,
     coordsToString,
 } from '../../lib/gameLogic'; // Adjust path if needed
+import { patternToCoords, Pattern } from '../../lib/patterns'; // Import pattern utilities
 
 // Import Components
 import MainGridView from '../../components/MainGridView'; // Adjust path if needed
 import ControlPanel from '../../components/ControlPanel'; // Adjust path if needed
+import PatternsModal from '../../components/PatternsModal'; // Import the PatternsModal component
 
 // --- Constants ---
-const SIMULATION_INTERVAL_MS = 100;
+const DEFAULT_SIMULATION_INTERVAL_MS = 100;
 const DEBUG = true; // Ensure this is true for logging
 
 // --- Dynamic View Constants ---
@@ -57,6 +60,15 @@ type DimensionsChangeEvent = {
 
 // --- Component ---
 export default function GameScreen() {
+    // Get settings from route params
+    const params = useLocalSearchParams();
+    const [simulationSpeed, setSimulationSpeed] = useState<number>(
+        typeof params.speed === 'string' ? parseInt(params.speed, 10) : DEFAULT_SIMULATION_INTERVAL_MS
+    );
+    const [liveCellColor, setLiveCellColor] = useState<string>(
+        typeof params.liveCellColor === 'string' ? params.liveCellColor : '#00ff00'
+    );
+    
     // --- State Variables ---
     const [liveCells, setLiveCells] = useState<GridState>(() => {
         // Initial Glider pattern for testing
@@ -71,6 +83,7 @@ export default function GameScreen() {
     const [isRunning, setIsRunning] = useState<boolean>(false);
     const [generation, setGeneration] = useState<number>(0);
     const [debugMode, setDebugMode] = useState<boolean>(DEBUG);
+    const [patternsModalVisible, setPatternsModalVisible] = useState<boolean>(false); // State for patterns modal
 
     // --- Container Measurements (Layout in DPs) ---
     const [gridContainerMeasurements, setGridContainerMeasurements] = useState({
@@ -250,13 +263,49 @@ export default function GameScreen() {
          }
      }, [DEBUG]); // Dependency updated for logging
 
+    // Update settings when route params change
+    useEffect(() => {
+        if (typeof params.speed === 'string') {
+            const newSpeed = parseInt(params.speed, 10);
+            if (newSpeed !== simulationSpeed) {
+                if(DEBUG) console.log(`Updating simulation speed from ${simulationSpeed} to ${newSpeed}`);
+                setSimulationSpeed(newSpeed);
+                
+                // If simulation is running, restart it with new speed immediately
+                if (isRunning && intervalRef.current) {
+                    if(DEBUG) console.log(`Simulation running, updating interval from ${simulationSpeed}ms to ${newSpeed}ms`);
+                    clearInterval(intervalRef.current);
+                    intervalRef.current = setInterval(runSimulationStep, newSpeed);
+                }
+            }
+        }
+        
+        if (typeof params.liveCellColor === 'string' && params.liveCellColor !== liveCellColor) {
+            if(DEBUG) console.log(`Updating live cell color from ${liveCellColor} to ${params.liveCellColor}`);
+            setLiveCellColor(params.liveCellColor);
+        }
+    }, [params.speed, params.liveCellColor, isRunning, simulationSpeed, liveCellColor, runSimulationStep, DEBUG]);
 
     const handleToggleRun = useCallback(() => {
         setIsRunning(prev => {
-             if(DEBUG) console.log(`>>> handleToggleRun: Toggling isRunning from ${prev} to ${!prev}`); // <-- Log 6
-             return !prev;
+            const newIsRunning = !prev;
+            if (newIsRunning) {
+                // Start simulation
+                if (intervalRef.current === null) {
+                    intervalRef.current = setInterval(runSimulationStep, simulationSpeed);
+                    if (DEBUG) console.log(`Starting simulation with interval ${simulationSpeed}ms`);
+                }
+            } else {
+                // Stop simulation
+                if (intervalRef.current !== null) {
+                    clearInterval(intervalRef.current);
+                    intervalRef.current = null;
+                    if (DEBUG) console.log('Stopping simulation');
+                }
+            }
+            return newIsRunning;
         });
-    }, [DEBUG]); // Dependency updated for logging
+    }, [simulationSpeed, runSimulationStep, DEBUG]);
 
     const handleStep = useCallback(() => {
         if (!isRunning) {
@@ -318,6 +367,37 @@ export default function GameScreen() {
 
     const handleToggleDebug = useCallback(() => setDebugMode(prev => !prev), []);
 
+    // --- Handler for showing patterns modal ---
+    const handleShowPatterns = useCallback(() => {
+        if (isRunning) return; // Prevent showing patterns while running
+        setPatternsModalVisible(true);
+    }, [isRunning]);
+
+    // --- Handler for selecting a pattern ---
+    const handleSelectPattern = useCallback((pattern: Pattern) => {
+        if (isRunning) return; // Prevent adding patterns while running
+
+        try {
+            // Get the current center coordinates
+            const center = viewCenterCoords.value;
+            // Convert pattern coordinates to absolute coordinates centered at viewCenter
+            const patternCoords = patternToCoords(pattern, Math.round(center.row), Math.round(center.col));
+            
+            // Add the pattern to the existing cells
+            setLiveCells(prevCells => {
+                const newCells = new Set(prevCells); // Create a copy of the existing cells
+                patternCoords.forEach(coordStr => newCells.add(coordStr));
+                return newCells;
+            });
+            
+            // Don't reset generation counter when adding a pattern
+            
+            if (DEBUG) console.log(`Added pattern '${pattern.name}' at R:${center.row.toFixed(1)}, C:${center.col.toFixed(1)}`);
+        } catch (error) {
+            console.error("Error adding pattern:", error);
+        }
+    }, [isRunning, viewCenterCoords, DEBUG]);
+
     // --- Simulation Loop Effect ---
     useEffect(() => {
         // This effect runs when `isRunning` or `runSimulationStep` changes identity
@@ -331,8 +411,8 @@ export default function GameScreen() {
 
         if (isRunning) {
             // Only set interval if isRunning is true
-            if (DEBUG) console.log(`>>> useEffect[isRunning]: Setting up new interval (${SIMULATION_INTERVAL_MS}ms)`); // <-- Log 11
-            intervalRef.current = setInterval(runSimulationStep, SIMULATION_INTERVAL_MS);
+            if (DEBUG) console.log(`>>> useEffect[isRunning]: Setting up new interval (${simulationSpeed}ms)`); // <-- Log 11
+            intervalRef.current = setInterval(runSimulationStep, simulationSpeed);
         } else {
              // This block runs if isRunning is false
              if (DEBUG) console.log(">>> useEffect[isRunning]: isRunning is false, interval remains cleared."); // <-- Log 12
@@ -668,6 +748,7 @@ export default function GameScreen() {
                                     liveCells={liveCells}
                                     viewCenterCoords={viewCenterCoords}
                                     cellSizeDP={cellSizeDP}
+                                    liveCellColor={liveCellColor}
                                 />
                             ) : (
                                 <View style={styles.loadingContainer}>
@@ -688,9 +769,18 @@ export default function GameScreen() {
                      onStep={handleStep}
                      onClear={handleClear}
                      onRandomize={handleRandomize}
+                     onShowPatterns={handleShowPatterns}
                      onToggleDebug={handleToggleDebug}
                      debugMode={debugMode}
                  />
+
+                {/* Patterns Modal */}
+                <PatternsModal
+                    visible={patternsModalVisible}
+                    onClose={() => setPatternsModalVisible(false)}
+                    onSelectPattern={handleSelectPattern}
+                    liveCellColor={liveCellColor}
+                />
 
                 <StatusBar style="auto" />
             </View>

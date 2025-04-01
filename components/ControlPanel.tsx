@@ -1,7 +1,8 @@
 // GameOfLifeApp/components/ControlPanel.tsx
 
 import React from 'react';
-import { View, Button, StyleSheet, Platform, Switch, Text } from 'react-native';
+import { View, StyleSheet, Platform, Pressable } from 'react-native';
+import { FontAwesome5 } from '@expo/vector-icons';
 
 interface ControlPanelProps {
   isRunning: boolean;
@@ -9,6 +10,7 @@ interface ControlPanelProps {
   onStep: () => void;
   onClear: () => void;
   onRandomize: () => void;
+  onShowPatterns: () => void;
   onToggleDebug?: () => void;
   debugMode?: boolean;
   // Add props for speed control later if needed
@@ -20,47 +22,101 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   onStep,
   onClear,
   onRandomize,
+  onShowPatterns,
   onToggleDebug,
   debugMode = false,
 }) => {
   return (
     <View style={styles.container}>
       <View style={styles.buttonRow}>
-        <Button
-          title={isRunning ? 'Pause' : 'Start'}
+        <Pressable
+          style={({pressed}) => [
+            styles.iconButton,
+            isRunning ? styles.pauseButton : styles.startButton,
+            pressed && styles.buttonPressed
+          ]}
           onPress={onToggleRun}
-          // Use platform-specific colors or standard ones
-          color={isRunning ? (Platform.OS === 'ios' ? '#FFA500' : '#FFA500') : (Platform.OS === 'ios' ? '#4CAF50' : '#4CAF50')}
-        />
-        <Button
-          title="Step"
+          accessibilityLabel={isRunning ? "Pause" : "Start"}
+        >
+          <FontAwesome5
+            name={isRunning ? 'pause' : 'play'}
+            size={22} 
+            color="#fff"
+          />
+        </Pressable>
+
+        <Pressable
+          style={({pressed}) => [
+            styles.iconButton,
+            styles.stepButton,
+            pressed && styles.buttonPressed,
+            isRunning && styles.disabledButton
+          ]}
           onPress={onStep}
-          disabled={isRunning} // Disable Step button while running
-        />
-        <Button
-          title="Random"
+          disabled={isRunning}
+          accessibilityLabel="Step"
+        >
+          <FontAwesome5
+            name="step-forward"
+            size={22}
+            color="#fff"
+          />
+        </Pressable>
+
+        <Pressable
+          style={({pressed}) => [
+            styles.iconButton,
+            styles.randomButton,
+            pressed && styles.buttonPressed,
+            isRunning && styles.disabledButton
+          ]}
           onPress={onRandomize}
-          disabled={isRunning} // Disable Randomize while running
-        />
-        <Button
-          title="Clear"
+          disabled={isRunning}
+          accessibilityLabel="Random"
+        >
+          <FontAwesome5
+            name="random"
+            size={22}
+            color="#fff"
+          />
+        </Pressable>
+
+        <Pressable
+          style={({pressed}) => [
+            styles.iconButton,
+            styles.patternsButton,
+            pressed && styles.buttonPressed,
+            isRunning && styles.disabledButton
+          ]}
+          onPress={onShowPatterns}
+          disabled={isRunning}
+          accessibilityLabel="Patterns"
+        >
+          <FontAwesome5
+            name="puzzle-piece"
+            size={22}
+            color="#fff"
+          />
+        </Pressable>
+
+        <Pressable
+          style={({pressed}) => [
+            styles.iconButton,
+            styles.clearButton,
+            pressed && styles.buttonPressed
+          ]}
           onPress={onClear}
-          color={Platform.OS === 'ios' ? '#f44336' : '#f44336'} // Red for Clear
-        />
+          accessibilityLabel="Clear"
+        >
+          <FontAwesome5
+            name="trash-alt"
+            size={22}
+            color="#fff"
+          />
+        </Pressable>
       </View>
       
-      {/* Debug Toggle - only show if the toggle handler is provided */}
-      {onToggleDebug && (
-        <View style={styles.debugContainer}>
-          <Text style={styles.debugText}>Debug Mode</Text>
-          <Switch
-            value={debugMode}
-            onValueChange={onToggleDebug}
-            trackColor={{ false: "#767577", true: "#81b0ff" }}
-            thumbColor={debugMode ? "#f5dd4b" : "#f4f3f4"}
-          />
-        </View>
-      )}
+      {/* Debug Toggle is removed from UI but props are kept for functionality */}
       
       {/* Add Speed Slider/Buttons here later */}
     </View>
@@ -70,32 +126,60 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 const styles = StyleSheet.create({
   container: {
     width: '100%',
-    paddingVertical: 10,
-    paddingHorizontal: 5,
-    backgroundColor: '#e0e0e0', // Match placeholder style or customize
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: '#ccc',
+    paddingVertical: 15,
+    paddingHorizontal: 10,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    borderWidth: 0,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   buttonRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-around', // Space out buttons
+    justifyContent: 'space-evenly',
+    width: '100%',
   },
-  debugContainer: {
-    flexDirection: 'row',
+  iconButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#ccc',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 2,
   },
-  debugText: {
-    marginRight: 10,
-    fontSize: 12,
-    color: '#555',
-  }
+  buttonPressed: {
+    opacity: 0.8,
+    transform: [{ scale: 0.95 }],
+  },
+  disabledButton: {
+    opacity: 0.5,
+  },
+  startButton: {
+    backgroundColor: '#4CAF50',
+  },
+  pauseButton: {
+    backgroundColor: '#FF9800',
+  },
+  stepButton: {
+    backgroundColor: '#2196F3',
+  },
+  randomButton: {
+    backgroundColor: '#9C27B0',
+  },
+  patternsButton: {
+    backgroundColor: '#007bff',
+  },
+  clearButton: {
+    backgroundColor: '#f44336',
+  },
 });
 
 export default ControlPanel;
